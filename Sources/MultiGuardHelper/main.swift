@@ -16,8 +16,9 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
         // Only accept connections from the signed MultiGuard app.
-        guard let code = SecCodeCreateWithPID(newConnection.processIdentifier),
-              let requirement = SecRequirementCreate(string: HelperConstants.authorizedClientRequirement),
+        guard let clientRequirement = HelperConstants.authorizedClientRequirement,
+              let code = SecCodeCreateWithPID(newConnection.processIdentifier),
+              let requirement = SecRequirementCreate(string: clientRequirement),
               SecCodeCheckValidity(code, [], requirement) else {
             return false
         }
@@ -133,6 +134,12 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
             process.standardError = stderr
         }
 
+        // launchd starts the helper with PATH=/usr/bin:/bin:/usr/sbin:/sbin; wg-quick looks up `wg`
+        // and Homebrew's bash through PATH, so put the Homebrew prefixes first.
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+        process.environment = environment
+
         try process.run()
         process.waitUntilExit()
 
@@ -147,8 +154,9 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
     }
 
     private func parseBashMajorVersion(_ output: String) -> Int? {
+        // Localized: German prints "GNU bash, Version 5.3.20(1)-release".
         let prefix = "GNU bash, version "
-        guard let range = output.range(of: prefix) else { return nil }
+        guard let range = output.range(of: prefix, options: .caseInsensitive) else { return nil }
         let remainder = output[range.upperBound...]
         guard let dotIndex = remainder.firstIndex(of: ".") else { return nil }
         return Int(remainder[..<dotIndex])
@@ -175,9 +183,24 @@ enum HelperError: Error, LocalizedError {
 struct HelperConstants {
     static let machServiceName = "com.multiguard.helper"
 
-    // This requirement must match the main app's signing identifier.
-    // Replace 'TEAM_ID' with your actual Apple Developer Team ID.
-    static let authorizedClientRequirement = "identifier \"com.multiguard.app\" and anchor apple generic and certificate leaf[subject.OU] = \"TEAM_ID\""
+    /// Only the MultiGuard app signed by the same team as this helper may connect. The team is read
+    /// from the helper's own signature, so no team ID has to be compiled in. Nil (reject everyone)
+    /// when the helper itself carries no team, e.g. an ad-hoc build.
+    static let authorizedClientRequirement: String? = {
+        guard let team = ownTeamIdentifier() else { return nil }
+        return "identifier \"com.multiguard.app\" and anchor apple generic and certificate leaf[subject.OU] = \"\(team)\""
+    }()
+
+    private static func ownTeamIdentifier() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return nil }
+        return dict[kSecCodeInfoTeamIdentifier as String] as? String
+    }
 }
 
 // MARK: - SecCode helpers

@@ -17,3 +17,9 @@ This is an append-only log of modifications, updates, and indexing runs performe
 - Created project pages: `multiguard-overview.md`, `multiguard-architecture.md`, `multiguard-setup.md`, `multiguard-decisions.md`, `wireguard-official-architecture.md`.
 - Updated `wiki/index.md` to catalog the new Project section.
 - Prepared to lint, commit, and push.
+
+## [2026-10-02] fix | Connect hang, localized Bash check, working Developer ID helper.
+- App: skip helper on ad-hoc builds, XPC ping timeout + error handler, case-insensitive Bash version check.
+- Helper: trust clients of its own signing team, case-insensitive Bash check, Homebrew PATH for spawned processes; launchd plist uses `BundleProgram`.
+- `build-app.sh`: resolve the Developer ID identity by Team ID.
+- Updated `multiguard-architecture.md`, `multiguard-setup.md`, `multiguard-decisions.md`; created `multiguard-troubleshooting.md`.

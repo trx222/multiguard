@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import ServiceManagement
 
 enum HelperManagerError: Error, LocalizedError {
@@ -32,14 +33,47 @@ final class HelperManager: ObservableObject {
     private let helperMachServiceName = "com.multiguard.helper"
     private let launchdPlistName = "com.multiguard.helper.plist"
 
+    /// How long to wait for the helper to answer a ping before giving up on it.
+    private let pingTimeout: TimeInterval = 3
+
     private init() {}
+
+    /// The helper only accepts clients signed with a Developer ID team, so for ad-hoc
+    /// (development) builds it can never work and must not be registered at all.
+    static let isDeveloperSigned: Bool = {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return false }
+        return dict[kSecCodeInfoTeamIdentifier as String] is String
+    }()
 
     func install() async throws {
         let service = SMAppService.daemon(plistName: launchdPlistName)
+        guard Self.isDeveloperSigned else {
+            // Remove a registration left behind by an earlier build: launchd would keep it in
+            // "spawn scheduled" forever and every XPC call to it would go unanswered.
+            if service.status != .notRegistered {
+                try? await service.unregister()
+            }
+            throw HelperManagerError.notSigned
+        }
+        if service.status == .enabled {
+            isInstalled = true
+            return
+        }
         do {
             try service.register()
             isInstalled = true
         } catch {
+            // The first registration needs the user to allow the background item in
+            // System Settings → General → Login Items; take them there.
+            if service.status == .requiresApproval {
+                SMAppService.openSystemSettingsLoginItems()
+            }
             throw HelperManagerError.installationFailed(error.localizedDescription)
         }
     }
@@ -58,22 +92,33 @@ final class HelperManager: ObservableObject {
             self?.connection = nil
         }
         newConnection.resume()
-        connection = newConnection
 
-        guard let proxy = newConnection.remoteObjectProxy as? MultiGuardHelperProtocol else {
-            throw HelperManagerError.connectionFailed
-        }
-
-        let pingResult = await withCheckedContinuation { continuation in
+        // Without an error handler and a timeout a helper that never starts (missing binary,
+        // rejected client) leaves the ping reply pending forever, and the caller never reaches
+        // the osascript fallback.
+        let once = ResumeOnce()
+        let pingResult = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let proxy = newConnection.remoteObjectProxyWithErrorHandler { _ in
+                if once.claim() { continuation.resume(returning: false) }
+            } as? MultiGuardHelperProtocol
+            guard let proxy else {
+                if once.claim() { continuation.resume(returning: false) }
+                return
+            }
             proxy.ping { result in
-                continuation.resume(returning: result)
+                if once.claim() { continuation.resume(returning: result) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + pingTimeout) {
+                if once.claim() { continuation.resume(returning: false) }
             }
         }
 
         guard pingResult else {
+            newConnection.invalidate()
             throw HelperManagerError.connectionFailed
         }
 
+        connection = newConnection
         return newConnection
     }
 
@@ -117,7 +162,7 @@ final class HelperManager: ObservableObject {
     /// tries to install the helper: it is polled every few seconds, so it must be cheap when the
     /// helper is unavailable (unsigned development builds).
     func tunnelStats(interface: String) async throws -> String {
-        guard isInstalled else { throw HelperManagerError.helperNotFound }
+        guard Self.isDeveloperSigned, isInstalled else { throw HelperManagerError.helperNotFound }
         let connection = try await connect()
         guard let proxy = connection.remoteObjectProxy as? MultiGuardHelperProtocol else {
             throw HelperManagerError.connectionFailed
@@ -139,5 +184,19 @@ final class HelperManager: ObservableObject {
         if !isInstalled {
             try await install()
         }
+    }
+}
+
+/// Guards a continuation that several callbacks (reply, error handler, timeout) race to resume.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }

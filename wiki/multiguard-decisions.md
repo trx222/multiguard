@@ -25,3 +25,15 @@ Each imported config is copied to a uniquely-named file (`mg_<12-hex-chars>.conf
 ## Local config copies
 
 Imported `.conf` content is copied into `~/Library/Application Support/MultiGuard/Configs/`. This lets users delete the original files and still connect, and ensures the stored path is stable for `wg-quick up/down`.
+
+## Helper trusts its own team instead of a compiled-in Team ID
+
+The client requirement originally contained a literal `TEAM_ID` placeholder that the build script never replaced, so no build could ever connect. The helper now derives the team from its own signature at runtime. Rejected: substituting the Team ID into the Swift source at build time (modifies tracked files, easy to commit by accident) and an `Info.plist` lookup (the helper is a bare binary with an embedded plist, more moving parts for the same result).
+
+## Skip the helper entirely on ad-hoc builds
+
+An ad-hoc helper can never accept a client, yet registering it left a launchd job in `spawn scheduled` that swallowed every XPC call. Ad-hoc builds now never register it and remove stale registrations. Combined with the ping timeout this guarantees the `osascript` fallback is reached.
+
+## No Touch ID for unsigned builds
+
+The `osascript` admin dialog does not support Touch ID. Considered and rejected for now: `AuthorizationCopyRights` + deprecated `AuthorizationExecuteWithPrivileges` (uncertain Touch ID support, deprecated API), `sudo` with `pam_tid` (only works in a terminal), and a NOPASSWD sudoers rule for `wg-quick` (root code execution via `PostUp` in any config). The signed helper removes the prompt altogether, which is the actual goal.
