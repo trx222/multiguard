@@ -39,14 +39,20 @@ Then press **Cmd+R**.
 To enable the privileged helper and avoid repeated password dialogs, sign with an Apple Developer ID:
 
 ```bash
-DEVELOPER_ID=ABCD123456 ./scripts/build-app.sh
+DEVELOPER_ID=<TEAM_ID> ./scripts/build-app.sh
 open MultiGuard.app
 ```
 
-Find your Team ID with:
+The script picks the keychain identity matching `Developer ID Application: <Name> (<TEAM_ID>)` by its hash and aborts if none exists. Find your identities with:
 
 ```bash
-security find-identity -v -p codesigning
+security find-identity -p codesigning
 ```
 
-Unsigned builds ad-hoc sign the app and fall back to the standard macOS administrator prompt.
+`-v` may report "0 valid identities" even when signing works; omit it. The Team ID is also listed in Xcode → Settings → Accounts or under *Membership details* at developer.apple.com.
+
+On the first **Connect** of a signed build, allow MultiGuard in *System Settings → General → Login Items & Extensions*. That first connect may still use the password prompt; later ones need none.
+
+Unsigned builds ad-hoc sign the app and fall back to the standard macOS administrator prompt on every connect/disconnect. That prompt (`do shell script … with administrator privileges`) never offers Touch ID.
+
+See [Troubleshooting](multiguard-troubleshooting.md) if Connect does nothing.
