@@ -43,6 +43,8 @@ DEVELOPER_ID=<TEAM_ID> ./scripts/build-app.sh
 open MultiGuard.app
 ```
 
+To avoid retyping the Team ID, put the call in a personal `build.local.sh`; `*.local.sh` is gitignored so the ID stays out of the repo.
+
 The script picks the keychain identity matching `Developer ID Application: <Name> (<TEAM_ID>)` by its hash and aborts if none exists. Find your identities with:
 
 ```bash
