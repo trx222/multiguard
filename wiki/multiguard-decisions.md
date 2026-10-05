@@ -37,3 +37,11 @@ An ad-hoc helper can never accept a client, yet registering it left a launchd jo
 ## No Touch ID for unsigned builds
 
 The `osascript` admin dialog does not support Touch ID. Considered and rejected for now: `AuthorizationCopyRights` + deprecated `AuthorizationExecuteWithPrivileges` (uncertain Touch ID support, deprecated API), `sudo` with `pam_tid` (only works in a terminal), and a NOPASSWD sudoers rule for `wg-quick` (root code execution via `PostUp` in any config). The signed helper removes the prompt altogether, which is the actual goal.
+
+## Fall back to osascript only when the helper is unavailable
+
+Originally any helper error triggered the `osascript` prompt. Once the helper is running, its errors come from `wg-quick` itself; running the same command again as root via `osascript` fails or hangs the same way and only adds a pointless password prompt. Now the fallback applies to `HelperManagerError` (not signed, not installed, unreachable) but not to timeouts or errors the helper returned. Rejected: always falling back (pointless prompts, and `osascript` has no timeout) and never falling back (breaks unsigned builds).
+
+## Timeouts in both helper and app
+
+The app-side timeout alone would free the UI but leave a stuck `wg` child holding the helper; the helper-side kill alone wouldn't cover a helper that stops answering. Both are needed. Rejected: killing the whole process group on timeout — `Process` offers no `setpgid`, and wg-quick's background children (wireguard-go, route monitor) must survive a successful `up` anyway.

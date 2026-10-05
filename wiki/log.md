@@ -23,3 +23,8 @@ This is an append-only log of modifications, updates, and indexing runs performe
 - Helper: trust clients of its own signing team, case-insensitive Bash check, Homebrew PATH for spawned processes; launchd plist uses `BundleProgram`.
 - `build-app.sh`: resolve the Developer ID identity by Team ID.
 - Updated `multiguard-architecture.md`, `multiguard-setup.md`, `multiguard-decisions.md`; created `multiguard-troubleshooting.md`.
+
+## [2026-10-05] fix | Disconnect hung forever behind a stuck stats call.
+- Helper: requests run concurrently; child processes killed after a timeout; output collected without waiting for EOF; NSError replies keep their message.
+- App: every XPC call has an error handler and timeout; osascript fallback only when the helper is unavailable; dead tunnels shown as failed; disconnect of an already-dead tunnel succeeds.
+- Updated `multiguard-architecture.md`, `multiguard-decisions.md`, `multiguard-setup.md`, `multiguard-troubleshooting.md`.
