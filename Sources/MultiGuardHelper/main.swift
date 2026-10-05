@@ -33,36 +33,47 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
         reply(true)
     }
 
+    // NSXPCConnection delivers messages one at a time per connection. Each request therefore runs on
+    // a global queue, so a `wg show` stuck on a hung wireguard-go socket can't hold up a disconnect.
+    // Errors go out as plain NSErrors with an explicit description: a Swift LocalizedError loses its
+    // message when it crosses the XPC boundary.
+
     func connect(withConfigPath configPath: String, reply: @escaping (String?, Error?) -> Void) {
-        do {
-            let interface = try runWGQuick(action: "up", configPath: configPath)
-            reply(interface, nil)
-        } catch {
-            reply(nil, error)
+        DispatchQueue.global().async {
+            do {
+                let interface = try self.runWGQuick(action: "up", configPath: configPath)
+                reply(interface, nil)
+            } catch {
+                reply(nil, xpcError(error))
+            }
         }
     }
 
     func disconnect(withConfigPath configPath: String, reply: @escaping (Error?) -> Void) {
-        do {
-            _ = try runWGQuick(action: "down", configPath: configPath)
-            reply(nil)
-        } catch {
-            reply(error)
+        DispatchQueue.global().async {
+            do {
+                _ = try self.runWGQuick(action: "down", configPath: configPath)
+                reply(nil)
+            } catch {
+                reply(xpcError(error))
+            }
         }
     }
 
     func stats(forInterface interface: String, reply: @escaping (String?, Error?) -> Void) {
         // Only accept plausible interface names so this can't be used to pass arbitrary arguments to wg.
         guard interface.range(of: "^[A-Za-z0-9_.-]{1,32}$", options: .regularExpression) != nil else {
-            reply(nil, HelperError.commandFailed(1, "Invalid interface name"))
+            reply(nil, xpcError(HelperError.commandFailed(1, "Invalid interface name")))
             return
         }
-        do {
-            let wg = try findExecutable("wg")
-            let dump = try runProcess(executable: wg, arguments: ["show", interface, "dump"])
-            reply(stripPrivateKey(fromDump: dump), nil)
-        } catch {
-            reply(nil, error)
+        DispatchQueue.global().async {
+            do {
+                let wg = try self.findExecutable("wg")
+                let dump = try self.runProcess(executable: wg, arguments: ["show", interface, "dump"], timeout: 5)
+                reply(self.stripPrivateKey(fromDump: dump), nil)
+            } catch {
+                reply(nil, xpcError(error))
+            }
         }
     }
 
@@ -89,7 +100,8 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
             throw HelperError.bashTooOld
         }
 
-        try runProcess(executable: bash, arguments: [wgQuick, action, configPath], captureOutput: false)
+        // wg-quick talks to wireguard-go through `wg`; if that daemon hangs, so does wg-quick.
+        try runProcess(executable: bash, arguments: [wgQuick, action, configPath], timeout: 30)
 
         // Discover the assigned utun interface.
         let wg = try findExecutable("wg")
@@ -121,18 +133,13 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
         throw HelperError.executableNotFound(name)
     }
 
+    /// Run a process and return its stdout. It is killed after `timeout` seconds, so a hung child
+    /// (e.g. `wg` blocked on an unresponsive wireguard-go socket) can't block the helper forever.
     @discardableResult
-    private func runProcess(executable: String, arguments: [String], captureOutput: Bool = true) throws -> String {
+    private func runProcess(executable: String, arguments: [String], timeout: TimeInterval = 10) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        if captureOutput {
-            process.standardOutput = stdout
-            process.standardError = stderr
-        }
 
         // launchd starts the helper with PATH=/usr/bin:/bin:/usr/sbin:/sbin; wg-quick looks up `wg`
         // and Homebrew's bash through PATH, so put the Homebrew prefixes first.
@@ -140,17 +147,43 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         process.environment = environment
 
-        try process.run()
-        process.waitUntilExit()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
 
-        if process.terminationStatus != 0 {
-            let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw HelperError.commandFailed(Int(process.terminationStatus), err)
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+
+        // Collect output as it arrives instead of reading to EOF: `wg-quick up` leaves wireguard-go
+        // and its route monitor running in the background with these pipes inherited, so EOF never
+        // comes. Reading concurrently also keeps a full pipe buffer from stalling the child.
+        let outBuffer = OutputBuffer()
+        let errBuffer = OutputBuffer()
+        stdout.fileHandleForReading.readabilityHandler = { outBuffer.append($0.availableData) }
+        stderr.fileHandleForReading.readabilityHandler = { errBuffer.append($0.availableData) }
+        defer {
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
         }
 
-        return captureOutput
-            ? String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            : ""
+        try process.run()
+
+        if finished.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if finished.wait(timeout: .now() + 2) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                finished.wait()
+            }
+            throw HelperError.timedOut(([executable] + arguments).joined(separator: " "), timeout)
+        }
+        // Let the readability handlers pick up whatever the process wrote just before exiting.
+        Thread.sleep(forTimeInterval: 0.1)
+
+        if process.terminationStatus != 0 {
+            throw HelperError.commandFailed(Int(process.terminationStatus), errBuffer.string)
+        }
+        return outBuffer.string
     }
 
     private func parseBashMajorVersion(_ output: String) -> Int? {
@@ -167,6 +200,7 @@ enum HelperError: Error, LocalizedError {
     case bashTooOld
     case executableNotFound(String)
     case commandFailed(Int, String)
+    case timedOut(String, TimeInterval)
 
     var errorDescription: String? {
         switch self {
@@ -175,7 +209,9 @@ enum HelperError: Error, LocalizedError {
         case .executableNotFound(let name):
             return "Executable not found: \(name)"
         case .commandFailed(let code, let stderr):
-            return "Command failed with code \(code): \(stderr)"
+            return "Command failed with code \(code): \(stderr.trimmingCharacters(in: .whitespacesAndNewlines))"
+        case .timedOut(let command, let seconds):
+            return "Timed out after \(Int(seconds)) s: \(command)"
         }
     }
 }
@@ -201,6 +237,30 @@ struct HelperConstants {
               let dict = info as? [String: Any] else { return nil }
         return dict[kSecCodeInfoTeamIdentifier as String] as? String
     }
+}
+
+/// Thread-safe accumulator for process output delivered by `readabilityHandler`.
+final class OutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    var string: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+}
+
+/// An NSError that keeps its message across XPC (see the note above `connect`).
+func xpcError(_ error: Error) -> NSError {
+    NSError(domain: HelperConstants.machServiceName, code: 1, userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
 }
 
 // MARK: - SecCode helpers

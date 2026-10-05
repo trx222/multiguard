@@ -7,6 +7,8 @@ enum HelperManagerError: Error, LocalizedError {
     case connectionFailed
     case helperNotFound
     case notSigned
+    case timedOut(Int)
+    case unreachable(String)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,10 @@ enum HelperManagerError: Error, LocalizedError {
             return "Privileged helper not installed."
         case .notSigned:
             return "The app must be code-signed with an Apple Developer ID to install a privileged helper."
+        case .timedOut(let seconds):
+            return "The privileged helper did not answer within \(seconds) s."
+        case .unreachable(let msg):
+            return "Lost connection to privileged helper: \(msg)"
         }
     }
 }
@@ -124,18 +130,15 @@ final class HelperManager: ObservableObject {
 
     func connectTunnel(configPath: String) async throws -> String {
         try await ensureHelper()
-        let connection = try await connect()
-        guard let proxy = connection.remoteObjectProxy as? MultiGuardHelperProtocol else {
-            throw HelperManagerError.connectionFailed
-        }
-        return try await withCheckedThrowingContinuation { continuation in
+        // wg-quick itself is limited to 30 s inside the helper; leave room for the checks around it.
+        return try await call(timeout: 50) { proxy, finish in
             proxy.connect(withConfigPath: configPath) { interface, error in
                 if let error = error {
-                    continuation.resume(throwing: error)
+                    finish(.failure(error))
                 } else if let interface = interface {
-                    continuation.resume(returning: interface)
+                    finish(.success(interface))
                 } else {
-                    continuation.resume(throwing: HelperManagerError.connectionFailed)
+                    finish(.failure(HelperManagerError.connectionFailed))
                 }
             }
         }
@@ -143,17 +146,9 @@ final class HelperManager: ObservableObject {
 
     func disconnectTunnel(configPath: String) async throws {
         try await ensureHelper()
-        let connection = try await connect()
-        guard let proxy = connection.remoteObjectProxy as? MultiGuardHelperProtocol else {
-            throw HelperManagerError.connectionFailed
-        }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        try await call(timeout: 50) { proxy, finish in
             proxy.disconnect(withConfigPath: configPath) { error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
+                finish(error.map { .failure($0) } ?? .success(()))
             }
         }
     }
@@ -163,20 +158,51 @@ final class HelperManager: ObservableObject {
     /// helper is unavailable (unsigned development builds).
     func tunnelStats(interface: String) async throws -> String {
         guard Self.isDeveloperSigned, isInstalled else { throw HelperManagerError.helperNotFound }
-        let connection = try await connect()
-        guard let proxy = connection.remoteObjectProxy as? MultiGuardHelperProtocol else {
-            throw HelperManagerError.connectionFailed
-        }
-        return try await withCheckedThrowingContinuation { continuation in
+        return try await call(timeout: 8) { proxy, finish in
             proxy.stats(forInterface: interface) { dump, error in
                 if let error = error {
-                    continuation.resume(throwing: error)
+                    finish(.failure(error))
                 } else if let dump = dump {
-                    continuation.resume(returning: dump)
+                    finish(.success(dump))
                 } else {
-                    continuation.resume(throwing: HelperManagerError.connectionFailed)
+                    finish(.failure(HelperManagerError.connectionFailed))
                 }
             }
+        }
+    }
+
+    /// Send one request to the helper. The reply, a connection error and the timeout race and the
+    /// first one wins: a reply that never arrives used to leave a tunnel in "Disconnecting…" forever.
+    private func call<T>(
+        timeout: TimeInterval,
+        _ send: @escaping (MultiGuardHelperProtocol, @escaping (Result<T, Error>) -> Void) -> Void
+    ) async throws -> T {
+        let connection = try await connect()
+        let once = ResumeOnce()
+        do {
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+                let finish: (Result<T, Error>) -> Void = { result in
+                    if once.claim() { continuation.resume(with: result) }
+                }
+                let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(HelperManagerError.unreachable(error.localizedDescription)))
+                } as? MultiGuardHelperProtocol
+                guard let proxy else {
+                    finish(.failure(HelperManagerError.connectionFailed))
+                    return
+                }
+                send(proxy, finish)
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    finish(.failure(HelperManagerError.timedOut(Int(timeout))))
+                }
+            }
+        } catch let error as HelperManagerError {
+            // Start from a fresh connection next time instead of reusing one that stopped answering.
+            if self.connection === connection {
+                connection.invalidate()
+                self.connection = nil
+            }
+            throw error
         }
     }
 

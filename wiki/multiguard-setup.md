@@ -53,6 +53,8 @@ security find-identity -p codesigning
 
 `-v` may report "0 valid identities" even when signing works; omit it. The Team ID is also listed in Xcode → Settings → Accounts or under *Membership details* at developer.apple.com.
 
+After a rebuild, launchd keeps the previous helper running; restart it with `sudo launchctl kickstart -k system/com.multiguard.helper` (a personal `build.local.sh` can do this after the build).
+
 On the first **Connect** of a signed build, allow MultiGuard in *System Settings → General → Login Items & Extensions*. That first connect may still use the password prompt; later ones need none.
 
 Unsigned builds ad-hoc sign the app and fall back to the standard macOS administrator prompt on every connect/disconnect. That prompt (`do shell script … with administrator privileges`) never offers Touch ID.
