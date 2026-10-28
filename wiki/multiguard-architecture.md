@@ -40,7 +40,7 @@ The helper (`com.multiguard.helper`) is registered once via `SMAppService.daemon
 - Every XPC call goes through one `call(timeout:)` path: `remoteObjectProxyWithErrorHandler` plus a timeout (ping 3 s, stats 8 s, connect/disconnect 50 s). On timeout or connection error the cached connection is dropped.
 - `TunnelManager` falls back to the `osascript` prompt only when the helper is *unavailable*. If the helper ran `wg-quick` and it failed or timed out, the error is shown instead of prompting for a password that would end the same way.
 - Disconnecting a tunnel whose wireguard-go already died (`… is not a WireGuard interface`) counts as success.
-- The 2 s stats refresh skips a tick while the previous one is still running, and marks a tunnel *failed — "Tunnel is no longer running"* when its interface disappears from `wg show interfaces`.
+- The stats refresh (every 5 s, `TunnelListViewModel.detailsRefreshInterval`) skips a tick while the previous one is still running, and marks a tunnel *failed — "Tunnel is no longer running"* when its interface disappears from `wg show interfaces`.
 
 ## Tunnel lifetime
 

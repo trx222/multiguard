@@ -161,7 +161,7 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
         let outBuffer = OutputBuffer()
         let errBuffer = OutputBuffer()
         // At EOF the handler fires again and again with empty data until it is removed — a busy
-        // loop that burned two cores while the 2 s stats poll was running. Remove it on EOF.
+        // loop that burned two cores while the stats poll was running. Remove it on EOF.
         stdout.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
             if chunk.isEmpty { handle.readabilityHandler = nil } else { outBuffer.append(chunk) }

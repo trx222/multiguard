@@ -10,6 +10,9 @@ class TunnelListViewModel: ObservableObject {
     private let manager = TunnelManager()
     private var detailsRefreshTimer: Timer?
     private var isRefreshingDetails = false
+    /// Each tick runs `wg show` per connected tunnel, `netstat` and `ifconfig`; 5 s keeps the
+    /// rates readable without polling the helper more than needed.
+    private static let detailsRefreshInterval: TimeInterval = 5
 
     var hasSelection: Bool {
         !selectedTunnelIDs.isEmpty
@@ -197,7 +200,7 @@ class TunnelListViewModel: ObservableObject {
 
     private func startDetailsRefreshTimer() {
         detailsRefreshTimer?.invalidate()
-        detailsRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        detailsRefreshTimer = Timer.scheduledTimer(withTimeInterval: Self.detailsRefreshInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 await self.refreshConnectedDetails()
@@ -206,7 +209,7 @@ class TunnelListViewModel: ObservableObject {
     }
 
     private func refreshConnectedDetails() async {
-        // The timer fires every 2 s; with a slow helper, overlapping refreshes would pile up.
+        // With a slow helper, overlapping refreshes would pile up.
         guard !isRefreshingDetails else { return }
         isRefreshingDetails = true
         defer { isRefreshingDetails = false }

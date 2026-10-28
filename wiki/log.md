@@ -32,3 +32,8 @@ This is an append-only log of modifications, updates, and indexing runs performe
 ## [2026-10-28] fix | Helper busy-looped on EOF and burned 30–40 % CPU.
 - `readabilityHandler` now removes itself on empty data; measured 4.2 s → 0.03 s CPU for 20 short commands.
 - Updated `multiguard-architecture.md`, `multiguard-troubleshooting.md`.
+
+## [2026-10-28] change | Stats poll every 5 s; proper app icon.
+- Refresh interval 2 s → 5 s (`detailsRefreshInterval`).
+- Icon redesigned on the macOS grid (two shields for multiple tunnels) and rendered via AppKit; the old `.icns` was a black square.
+- Updated `multiguard-architecture.md`, `multiguard-setup.md`.
