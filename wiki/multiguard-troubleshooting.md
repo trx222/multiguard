@@ -27,6 +27,12 @@ Fix: helper runs requests concurrently with per-process timeouts, the app times 
 sudo launchctl kickstart -k system/com.multiguard.helper
 ```
 
+## MultiGuardHelper uses 30–40 % CPU (fixed 2026-10-28)
+
+Introduced with the 2026-10-05 fix. A `FileHandle.readabilityHandler` is called repeatedly with empty data at EOF until it is set to nil. The helper only removed it after the process had exited plus a 100 ms grace period, so every `wg show … dump` from the 2 s stats poll spun two cores for that window — measured 4.2 s CPU for 20 calls taking 2.1 s. The handlers now remove themselves on EOF (0.03 s CPU for the same 20 calls).
+
+Spot it with `ps -M -p <helper pid>`: several threads with hours of system time.
+
 ## Is a tunnel still up?
 
 No root needed:
