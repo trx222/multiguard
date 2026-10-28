@@ -45,3 +45,9 @@ Originally any helper error triggered the `osascript` prompt. Once the helper is
 ## Timeouts in both helper and app
 
 The app-side timeout alone would free the UI but leave a stuck `wg` child holding the helper; the helper-side kill alone wouldn't cover a helper that stops answering. Both are needed. Rejected: killing the whole process group on timeout — `Process` offers no `setpgid`, and wg-quick's background children (wireguard-go, route monitor) must survive a successful `up` anyway.
+
+## Edit profiles as raw config text
+
+Profiles used to be immutable: changing one meant deleting and re-importing it. The editor shows the full `.conf` text. Rejected: a form with one field per key — `ConfigParser` only models a subset of keys (no `PostUp`, `Table`, …), so a form would silently drop the rest; opening the file in an external editor — no validation and no way to handle a connected tunnel.
+
+A connected tunnel is taken down **before** the file is overwritten, because `wg-quick down` reads the config for its `PreDown`/`PostDown` hooks and must see the version the tunnel was brought up with. A rename alone saves without reconnecting.

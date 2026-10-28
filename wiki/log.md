@@ -37,3 +37,8 @@ This is an append-only log of modifications, updates, and indexing runs performe
 - Refresh interval 2 s → 5 s (`detailsRefreshInterval`).
 - Icon redesigned on the macOS grid (two shields for multiple tunnels) and rendered via AppKit; the old `.icns` was a black square.
 - Updated `multiguard-architecture.md`, `multiguard-setup.md`.
+
+## [2026-10-28] feature | Edit profiles in place.
+- New `ProfileEditorView` (pencil button on each card): rename, edit config text with live validation, Save & Reconnect for connected tunnels.
+- `TunnelStore.configContent` / `updateConfig`, `TunnelListViewModel.updateProfile` / `rename`.
+- Updated `multiguard-architecture.md`, `multiguard-decisions.md`.
