@@ -28,3 +28,7 @@ This is an append-only log of modifications, updates, and indexing runs performe
 - Helper: requests run concurrently; child processes killed after a timeout; output collected without waiting for EOF; NSError replies keep their message.
 - App: every XPC call has an error handler and timeout; osascript fallback only when the helper is unavailable; dead tunnels shown as failed; disconnect of an already-dead tunnel succeeds.
 - Updated `multiguard-architecture.md`, `multiguard-decisions.md`, `multiguard-setup.md`, `multiguard-troubleshooting.md`.
+
+## [2026-10-28] fix | Helper busy-looped on EOF and burned 30–40 % CPU.
+- `readabilityHandler` now removes itself on empty data; measured 4.2 s → 0.03 s CPU for 20 short commands.
+- Updated `multiguard-architecture.md`, `multiguard-troubleshooting.md`.

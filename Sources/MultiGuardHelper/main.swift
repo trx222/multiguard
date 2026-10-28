@@ -160,8 +160,16 @@ class MultiGuardHelper: NSObject, MultiGuardHelperProtocol, NSXPCListenerDelegat
         // comes. Reading concurrently also keeps a full pipe buffer from stalling the child.
         let outBuffer = OutputBuffer()
         let errBuffer = OutputBuffer()
-        stdout.fileHandleForReading.readabilityHandler = { outBuffer.append($0.availableData) }
-        stderr.fileHandleForReading.readabilityHandler = { errBuffer.append($0.availableData) }
+        // At EOF the handler fires again and again with empty data until it is removed — a busy
+        // loop that burned two cores while the 2 s stats poll was running. Remove it on EOF.
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { handle.readabilityHandler = nil } else { outBuffer.append(chunk) }
+        }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { handle.readabilityHandler = nil } else { errBuffer.append(chunk) }
+        }
         defer {
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
